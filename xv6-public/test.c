@@ -5,7 +5,10 @@
 int
 main(int argc, char *argv[])
 {
-	printf(1, "my pid is %d\n", getpid());
-	printf(1, "my ppid is %d\n", getppid());
+	/*set_cpu_share();*/
+	int i =0;
+	for(; ;){
+			i++;
+	}
 	exit();
 }

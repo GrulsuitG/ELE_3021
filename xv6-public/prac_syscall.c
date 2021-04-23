@@ -19,10 +19,4 @@ sys_myfunction(void)
 	return printk_str(str);
 }
 
-int
-sys_yield(void)
-{
-	yield();
-	return 0;
-}
 

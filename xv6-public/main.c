@@ -18,23 +18,41 @@ int
 main(void)
 {
   kinit1(end, P2V(4*1024*1024)); // phys page allocator
+	/*cprintf("a\n");*/
   kvmalloc();      // kernel page table
-  mpinit();        // detect other processors
-  lapicinit();     // interrupt controller
+  /*cprintf("b\n");*/
+	mpinit();        // detect other processors
+  /*cprintf("c\n");*/
+	lapicinit();     // interrupt controller
+  /*cprintf("d\n");*/
   seginit();       // segment descriptors
+  /*cprintf("e\n");*/
   picinit();       // disable pic
+  /*cprintf("f\n");*/
   ioapicinit();    // another interrupt controller
+  /*cprintf("g\n");*/
   consoleinit();   // console hardware
+  /*cprintf("h\n");*/
   uartinit();      // serial port
+  /*cprintf("i\n");*/
   pinit();         // process table
+  /*cprintf("j\n");*/
   tvinit();        // trap vectors
+  /*cprintf("k\n");*/
   binit();         // buffer cache
+  /*cprintf("l\n");*/
   fileinit();      // file table
+  /*cprintf("m\n");*/
   ideinit();       // disk 
+  /*cprintf("n\n");*/
   startothers();   // start other processors
+  /*cprintf("o\n");*/
   kinit2(P2V(4*1024*1024), P2V(PHYSTOP)); // must come after startothers()
+  /*cprintf("p\n");*/
   userinit();      // first user process
+  /*cprintf("q\n");*/
   mpmain();        // finish this processor's setup
+  /*cprintf("r\n");*/
 }
 
 // Other CPUs jump here from entryother.S.

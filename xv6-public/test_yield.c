@@ -9,13 +9,13 @@ main(int argc, char *argv[])
 	if(pid == 0){
 		for(int i =0; i<10; i++){
 			printf(1,"child\n");
-			yields();
+			yield();
 		}
 	}
 	else{
 		for(int i=0; i<10; i++){
 			printf(1, "parent\n");
-			yields();
+			yield();
 		}
 	}
 }

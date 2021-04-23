@@ -6,11 +6,21 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "heap.h"
 
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
+
+struct{
+	struct proc *head;
+	struct proc *tail;
+}high, middle, low;
+
+struct proc *heap[NPROC+1];
+int heapSize = 0;
+
 
 static struct proc *initproc;
 
@@ -20,11 +30,18 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+
+
+//stride
+int allocated = MLFQPORTION;
+uint MLFQpass = 0;
+
 void
 pinit(void)
 {
   initlock(&ptable.lock, "ptable");
-}
+	
+}	
 
 // Must be called with interrupts disabled
 int
@@ -88,6 +105,12 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+	
+	p->priority = HIGHEST;
+	p->curticks = 0;
+	p->totalticks = 0;
+	
+	p->pass = 0;
 
   release(&ptable.lock);
 
@@ -111,7 +134,7 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
-
+	
   return p;
 }
 
@@ -122,7 +145,6 @@ userinit(void)
 {
   struct proc *p;
   extern char _binary_initcode_start[], _binary_initcode_size[];
-
   p = allocproc();
   
   initproc = p;
@@ -147,10 +169,11 @@ userinit(void)
   // writes to be visible, and the lock is also needed
   // because the assignment might not be atomic.
   acquire(&ptable.lock);
-
   p->state = RUNNABLE;
-
+	insert(p);
   release(&ptable.lock);
+
+
 }
 
 // Grow current process's memory by n bytes.
@@ -215,6 +238,7 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
+	insert(np);
 
   release(&ptable.lock);
 
@@ -263,7 +287,7 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
-  sched();
+	sched();
   panic("zombie exit");
 }
 
@@ -291,24 +315,24 @@ wait(void)
         p->kstack = 0;
         freevm(p->pgdir);
         p->pid = 0;
-        p->parent = 0;
-        p->name[0] = 0;
-        p->killed = 0;
-        p->state = UNUSED;
-        release(&ptable.lock);
-        return pid;
-      }
-    }
+				p->parent = 0;
+				p->name[0] = 0;
+				p->killed = 0;
+				p->state = UNUSED;
+				release(&ptable.lock);
+				return pid;
+			}
+		}
 
-    // No point waiting if we don't have any children.
-    if(!havekids || curproc->killed){
-      release(&ptable.lock);
-      return -1;
-    }
+		// No point waiting if we don't have any children.
+		if(!havekids || curproc->killed){
+			release(&ptable.lock);
+			return -1;
+		}
 
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
-  }
+		// Wait for children to exit.  (See wakeup1 call in proc_exit.)
+		sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+	}
 }
 
 //PAGEBREAK: 42
@@ -320,41 +344,177 @@ wait(void)
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
 void
+MLFQscheduler(void)
+{
+	struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+	MLFQtick = 0;
+	int priority = -1;
+  // Enable interrupts on this processor.
+	for(;;){
+		sti();
+    // Loop over process table looking for process to run.
+  	acquire(&ptable.lock);
+		if(high.head != 0 && high.head->state == RUNNABLE){
+			p = high.head;
+			priority = HIGHEST;
+		}
+		else if(middle.head != 0 && middle.head->state == RUNNABLE){
+			p = middle.head;
+			priority = MIDDLE;
+			
+		}
+		else if(low.head != 0 && low.head->state == RUNNABLE){
+			p = low.head;
+			priority = LOWEST;
+		}
+		else{
+			priority = -1;
+		}
+		if(priority == -1){
+			release(&ptable.lock);
+			continue;
+		}
+
+		
+			c->proc = p;
+			switchuvm(p);
+			p->state = RUNNING;
+			
+			dequeue(priority);
+			swtch(&(c->scheduler), p->context);
+			switchkvm();
+			
+			if(MLFQtick !=0 && MLFQtick % PRIORITY_BOOST == 0){
+				middle.head = 0;
+				low.head = 0;
+				for(struct proc *tp =ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+					if(tp->state == RUNNABLE && tp->priority != STRIDE){
+						tp->priority = HIGHEST;
+						tp->totalticks = 0;
+						insert(tp);
+					}
+				}
+				
+		}
+		c->proc = 0;
+		release(&ptable.lock);
+	}
+}
+
+void
+STRIDEscheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+	MLFQtick = 0;
+  for(;;){
+    // Enable interrupts on this processor.
+		sti();
+    // Loop over process table looking for process to run.
+    acquire(&ptable.lock);
+		
+		if(heapSize >0){
+		
+			p = remove(1);
+			if(UINT_MAX - p->pass < p->stride){
+				for(struct proc *tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+					if(tp->priority == STRIDE){
+						tp->pass = tp->stride;
+					}
+				}
+			}
+		// Switch to chosen process.  It is the process's job
+    // to release ptable.lock and then reacquire it
+    // before jumping back to us.
+	  	c->proc = p;
+			switchuvm(p);
+    	p->state = RUNNING;
+    	swtch(&(c->scheduler), p->context);
+    	switchkvm();
+			c->proc = 0;
+		}
+		release(&ptable.lock);
+	}		
+}
+
+
+void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+	MLFQtick = 0;
+	int priority;
+	sti();
   for(;;){
-    // Enable interrupts on this processor.
-    sti();
-
-    // Loop over process table looking for process to run.
+		//STRIDE scheduling
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
+		if(heapSize > 0 && peek() <= MLFQpass){
+			p = remove(1);
+				// Switch to chosen process.  It is the process's job
+    // to release ptable.lock and then reacquire it
+    // before jumping back to us.
+	  	c->proc = p;
+			switchuvm(p);
+    	p->state = RUNNING;
+    	swtch(&(c->scheduler), p->context);
+    	switchkvm();
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+			c->proc = 0;
+		}
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+		//MLFQ scheduling
+		else{
+			if(high.head != 0){
+				p = high.head;
+				priority = HIGHEST;
+			}
+			else if(middle.head != 0){
+				p = middle.head;
+				priority = MIDDLE;
+			}
+			else if(low.head != 0){
+				p = low.head;
+				priority = LOWEST;
+			}
+			else{
+				priority = -1;
+				release(&ptable.lock);
+				continue;
+			}
+			
+			MLFQpass += MLFQSTRIDE;
+			c->proc = p;
+			switchuvm(p);
+			p->state = RUNNING;
+			dequeue(priority);
+			
+			swtch(&(c->scheduler), p->context);
+			switchkvm();
+			//priority boost	
+			if(MLFQtick !=0 && MLFQtick % PRIORITY_BOOST == 0){
+				middle.head = 0;
+				low.head = 0;
+				for(struct proc *tp =ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+					if(tp->state == RUNNABLE && tp->priority != STRIDE){
+						tp->priority = HIGHEST;
+						tp->totalticks = 0;
+						insert(tp);
+					}
+				}
+				
+			}
+			
+			c->proc = 0;
+	 	}
+		release(&ptable.lock);
+	}
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
-    }
-    release(&ptable.lock);
-
-  }
 }
-
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -386,7 +546,35 @@ void
 yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
-  myproc()->state = RUNNABLE;
+  struct proc* p = myproc();
+	p->state = RUNNABLE;
+	
+	if(p->priority != STRIDE){
+		p->totalticks += p->curticks;
+		
+		//if process runtime is over priority allotment, then change priority
+		if(p->priority == HIGHEST && p->totalticks >= HIGHEST_ALLOTMENT){
+			p->priority = MIDDLE;
+		}
+		else if(p->priority == MIDDLE && p->totalticks >= MIDDLE_ALLOTMENT){
+			p->priority = LOWEST;	
+		}
+		p->curticks = 0;
+	}
+	else{
+		//pass overflow
+		if(UINT_MAX - p->pass < p->stride){
+			int min = p->pass < MLFQpass ? p->pass : MLFQpass;
+			for(struct proc *tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+				if(tp->priority == STRIDE){
+					tp->pass -= min;
+				}
+			}
+			MLFQpass -= min;
+		}
+		p->pass += p->stride;
+	}
+	insert(p);
   sched();
   release(&ptable.lock);
 }
@@ -437,8 +625,18 @@ sleep(void *chan, struct spinlock *lk)
   }
   // Go to sleep.
   p->chan = chan;
-  p->state = SLEEPING;
+	if(p->state == RUNNABLE){
 
+		if(p->priority == STRIDE)
+			remove(p->index);
+		else{
+			if(p->prev)
+				p->prev->next = p->next;
+			if(p->next)
+				p->next->prev = p->prev;
+		}
+	}
+  p->state = SLEEPING;
   sched();
 
   // Tidy up.
@@ -460,8 +658,10 @@ wakeup1(void *chan)
   struct proc *p;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
+    if(p->state == SLEEPING && p->chan == chan){
       p->state = RUNNABLE;
+			insert(p);
+		}
 }
 
 // Wake up all processes sleeping on chan.
@@ -488,6 +688,18 @@ kill(int pid)
       // Wake process from sleep if necessary.
       if(p->state == SLEEPING)
         p->state = RUNNABLE;
+			else{
+				if(p->priority == STRIDE ){
+					allocated -= p->portion;
+					remove(p->index);
+				}
+				else{
+					if(p->prev)
+						p->prev->next = p->next;
+					if(p->next)
+						p->next->prev = p->prev;
+				}
+			}
       release(&ptable.lock);
       return 0;
     }
@@ -515,7 +727,12 @@ procdump(void)
   struct proc *p;
   char *state;
   uint pc[10];
-
+	/*
+	 *for(int i = 1; i<heapSize+1; i++){
+	 *  cprintf("%d %d %d\n", heap[i]->pid, heap[i]->pass, heap[i]->index);
+	 *}
+	 */
+	cprintf("heapSize : %d\n", heapSize);
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
@@ -523,7 +740,7 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    cprintf("%d %s %s %d %x", p->pid, state, p->name, p->stride, p->pass);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
@@ -539,4 +756,159 @@ getppid(void)
 	return myproc()->parent->pid;
 }
 
+int
+getlev(void)
+{
+	return myproc()->priority;
+}
 
+int
+set_cpu_share(int portion)
+{
+	if(portion + allocated > 100)
+		return -1;
+	struct proc *p = myproc();
+	if(p->priority != STRIDE){
+		if(high.head == p)
+			high.head = p->next;
+		else if(middle.head == p)
+			middle.head = p->next;
+		else if(low.head == p)
+			low.head = p->next;
+		else{
+			if(p->prev)
+				p->prev->next = p->next;
+			if(p->next)
+				p->next->prev = p->prev;
+		}
+		p->next = 0;
+		p->prev = 0;
+	}
+	else{
+		allocated -= p->portion;
+	}
+	p->stride = TICKET/portion;
+	p->priority = STRIDE;
+	p->portion = portion;
+	allocated += portion;
+	p->pass = peek();
+
+	return 0;
+}
+
+int
+peek()
+{
+	return heap[1]->pass;
+}	
+
+void
+swap(int a, int b){
+	struct proc *tmp = heap[a];
+	heap[a]->index = b;
+	heap[b]->index = a;
+	heap[a] = heap[b];
+	heap[b] = tmp;
+}
+
+void
+insert(struct proc *p)
+{
+	p->next = p->prev = 0;
+	switch(p->priority){
+		case HIGHEST:
+			if(high.head == 0){
+				high.head = p;
+				high.tail = p;
+			}
+			else{
+				p->prev = high.tail;
+				high.tail->next = p;
+				high.tail = p;
+			}
+			break;
+		case MIDDLE:
+			if(middle.head == 0){
+				middle.head = p;
+				middle.tail = p;
+			}
+			else{
+				p->prev = middle.tail;
+				middle.tail->next = p;
+				middle.tail = p;
+			}
+			break;
+		case LOWEST:
+			if(low.head == 0){
+				low.head = p;
+				low.tail = p;
+			}	
+			else{
+				p->prev = low.tail;
+				low.tail->next = p;
+				low.tail = p;
+			}
+			break;
+		case STRIDE:
+			heap[++heapSize] = p;
+			p->index = heapSize;
+
+			int child = heapSize;
+			int parent = child/2;
+
+			while(child >1 && heap[child]->pass < heap[parent]->pass){
+				swap(child, parent);
+				child = parent;
+				parent /=2;
+			}
+			break;
+		default:
+			cprintf("error\n");
+	}
+}
+
+struct proc*
+remove(int index)
+{	
+	struct proc *p = heap[index];
+	swap(index, heapSize--);
+	int parent;
+	int child;
+	//heapify down
+	if(index != heapSize){
+		parent = index;
+		child = index*2;
+		if(child+1 <= heapSize){
+			child = heap[child]->pass < heap[child+1]->pass ? child : child+1;
+		}
+		while(child <= heapSize && heap[child]->pass < heap[parent]->pass){
+			swap(child, parent);
+			parent = child;
+			child *=2;
+
+			if(child+1 <= heapSize){
+				child = heap[child]->pass < heap[child+1]->pass ? child : child+1;
+			}
+		}	
+	}
+	return p;
+}
+
+
+void
+dequeue(int priority){
+	switch(priority){
+		case HIGHEST:
+			high.head = high.head->next;
+			high.head->prev = 0;
+			break;
+		case MIDDLE:
+			middle.head = middle.head->next;
+			middle.head->prev = 0;
+			break;
+		case LOWEST:
+			low.head = low.head->next;
+			low.head->prev = 0;
+			break;
+	}
+}

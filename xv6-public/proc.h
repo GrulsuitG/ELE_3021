@@ -49,6 +49,15 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  uint priority;               // MLFQ priority
+  uint curticks;               // current running time
+  uint totalticks;             // total running time
+	uint stride;                 // portion of stride
+	uint pass;                   // pass of stride schedule
+	uint index;
+	int portion;
+	struct proc *next;
+	struct proc *prev;
 };
 
 // Process memory is laid out contiguously, low addresses first:
@@ -56,3 +65,28 @@ struct proc {
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
+
+
+//priority
+#define HIGHEST 0
+#define MIDDLE 1
+#define LOWEST 2
+#define STRIDE 3
+
+//time quantum
+#define HIGHEST_QUANTUM 1
+#define MIDDLE_QUANTUM 2
+#define LOWEST_QUANTUM 4
+
+//time allotment
+#define HIGHEST_ALLOTMENT 5
+#define MIDDLE_ALLOTMENT (10 +HIGHEST_ALLOTMENT) 
+
+#define PRIORITY_BOOST 100
+
+//stride
+#define TICKET 1000
+#define MLFQPORTION 20
+#define MLFQSTRIDE (TICKET/MLFQPORTION)
+
+uint MLFQtick;
