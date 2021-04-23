@@ -129,6 +129,7 @@ int							peek(void);
 void						insert(struct proc*);
 struct proc*		remove(int);
 void						dequeue(int);
+void						overflow(uint);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

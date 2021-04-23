@@ -85,7 +85,7 @@ struct proc {
 #define PRIORITY_BOOST 100
 
 //stride
-#define TICKET 1000
+#define TICKET 10000
 #define MLFQPORTION 20
 #define MLFQSTRIDE (TICKET/MLFQPORTION)
 

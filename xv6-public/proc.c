@@ -285,6 +285,7 @@ exit(void)
   }
 
   // Jump into the scheduler, never to return.
+	
   curproc->state = ZOMBIE;
 	sched();
   panic("zombie exit");
@@ -317,6 +318,8 @@ wait(void)
 				p->parent = 0;
 				p->name[0] = 0;
 				p->killed = 0;
+				if(p->priority == STRIDE)	
+					allocated -= p->portion;
 				p->state = UNUSED;
 				release(&ptable.lock);
 				return pid;
@@ -549,6 +552,9 @@ yield(void)
 	p->state = RUNNABLE;
 	
 	if(p->priority != STRIDE){
+		if(UINT_MAX - MLFQpass < MLFQSTRIDE){
+			overflow(peek());
+		}
 		p->totalticks += p->curticks;
 		
 		//if process runtime is over priority allotment, then change priority
@@ -563,13 +569,7 @@ yield(void)
 	else{
 		//pass overflow
 		if(UINT_MAX - p->pass < p->stride){
-			int min = p->pass < MLFQpass ? p->pass : MLFQpass;
-			for(struct proc *tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
-				if(tp->priority == STRIDE){
-					tp->pass -= min;
-				}
-			}
-			MLFQpass -= min;
+			overflow(p->pass);
 		}
 		p->pass += p->stride;
 	}
@@ -689,7 +689,6 @@ kill(int pid)
         p->state = RUNNABLE;
 			else{
 				if(p->priority == STRIDE ){
-					allocated -= p->portion;
 					remove(p->index);
 				}
 				else{
@@ -910,4 +909,15 @@ dequeue(int priority){
 			low.head->prev = 0;
 			break;
 	}
+}
+
+void
+overflow(uint pass){
+	uint min = pass < MLFQpass ? pass : MLFQpass;
+	for(struct proc *tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+		if(tp->priority == STRIDE){
+			tp->pass -= min;
+		}		
+	}
+	MLFQpass -= min;
 }
