@@ -110,7 +110,11 @@ found:
 	p->totalticks = 0;
 	
 	p->pass = 0;
-
+	p->next = 0;
+	p->prev = 0;
+	p->time = 0;
+	p->retval = 0;
+	p->mainT = 0;
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -244,6 +248,79 @@ fork(void)
   return pid;
 }
 
+int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
+	
+	int i, pid;
+	uint oldsz, sz, sp, ustack[3];
+  struct proc *np;
+  struct proc *curproc = myproc();
+	pde_t *pgdir;
+
+  // Allocate process.
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+	oldsz = curproc->sz;
+	pgdir = curproc->pgdir;
+	if((sz = allocuvm(pgdir, sz, sz+2*PGSIZE) == 0)){
+		return -1;	
+	}
+	clearpteu(pgdir, (char*)(sz - 2*PGSIZE));
+	sp = sz;
+	
+	ustack[0] = 0xffffffff;
+	ustack[1] = (uint)arg;
+
+	sp -= 2*4;
+	if(copyout(pgdir, sp, ustack, 8) < 0){
+		deallocuvm(pgdir, sz, oldsz )
+		return -1;
+	}
+	np->pgdir = pgdir;
+  np->sz = curproc->sz;
+	np->tf->eip = (uint)start_routine;
+	np->tf->esp = sp;
+  *np->tf = *curproc->tf;
+	np->parent = curproc;
+	//store mainThread
+	if(curproc->mainT == 0){
+  	np->mainT = curproc;
+		curporc->mainT == curproc;
+	}
+	else{
+		np->mainT = curporc->mainT;
+	}
+	
+	np->priority = curproc->priority;
+	if(np->priorty == STRIDE){
+		np->stride = curproc->stride;
+		np->pass = curproc->pass;
+	}
+	else{
+		np->curticks = curproc->curticks;
+		np->totalticks = curproc->totalticks;
+	}
+
+  for(i = 0; i < NOFILE; i++)
+    if(curproc->ofile[i])
+      np->ofile[i] = filedup(curproc->ofile[i]);
+  np->cwd = idup(curproc->cwd);
+
+  safestrcpy(np->name, curproc->name, sizeof(curproc->name));
+
+
+  acquire(&ptable.lock);
+
+  np->state = RUNNABLE;
+	insert(np);
+  release(&ptable.lock);
+
+ 	*thread = np->pid;
+  return 0;
+
+
+}
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait() to find out it exited.
@@ -291,6 +368,50 @@ exit(void)
   panic("zombie exit");
 }
 
+void thread_exit(void *retval){
+	struct proc *curproc = myproc();
+	struct proc *p;
+  int fd;
+
+  if(curproc == initproc)
+    panic("init exiting");
+
+  // Close all open files.
+  for(fd = 0; fd < NOFILE; fd++){
+    if(curproc->ofile[fd]){
+      fileclose(curproc->ofile[fd]);
+      curproc->ofile[fd] = 0;
+    }
+  }
+
+  begin_op();
+  iput(curproc->cwd);
+  end_op();
+  curproc->cwd = 0;
+
+  acquire(&ptable.lock);
+
+  // Parent might be sleeping in wait().
+  wakeup1(curproc->mainT);
+
+  // Pass abandoned children to init.
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->parent == curproc){
+      p->parent = curporc->mainT;     
+			if(p->state == ZOMBIE)
+        wakeup1(initproc);
+    }
+  }
+
+  // Jump into the scheduler, never to return.
+	
+  curproc->state = ZOMBIE;
+	curproc->retval = retval;
+	sched();
+  panic("zombie exit");
+
+}
+
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
@@ -335,6 +456,49 @@ wait(void)
 		// Wait for children to exit.  (See wakeup1 call in proc_exit.)
 		sleep(curproc, &ptable.lock);  //DOC: wait-sleep
 	}
+}
+
+int thread_join(thread_t thread, void **retval){
+	struct proc *p;
+  int havekids, pid;
+  struct proc *curproc = myproc();
+  
+  acquire(&ptable.lock);
+  for(;;){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->mainT != curproc && p->pid != thread)
+        continue;
+      havekids = 1;
+      if(p->state == ZOMBIE){
+        // Found one.
+        pid = p->pid;
+        p->kstack = 0;
+        p->pid = 0;
+				p->parent = 0;
+				p->name[0] = 0;
+				p->killed = 0;
+				*retval = p->retval;
+				if(p->priority == STRIDE)	
+					allocated -= p->portion;
+				p->state = UNUSED;
+				release(&ptable.lock);
+				return 0;
+			}
+		}
+
+		// No point waiting if we don't have any children.
+		if(!havekids || curproc->killed){
+			release(&ptable.lock);
+			return -1;
+		}
+
+		// Wait for children to exit.  (See wakeup1 call in proc_exit.)
+		sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+	}
+
+
 }
 
 //PAGEBREAK: 42
@@ -465,7 +629,7 @@ scheduler(void)
     	p->state = RUNNING;
     	swtch(&(c->scheduler), p->context);
     	switchkvm();
-
+			p->curticks = 0;
 			c->proc = 0;
 		}
 

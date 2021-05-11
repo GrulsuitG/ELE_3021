@@ -49,15 +49,24 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  uint priority;               // MLFQ priority
+  
+	
+	uint priority;               // MLFQ priority
   uint curticks;               // current running time
   uint totalticks;             // total running time
+	struct proc *next;					 // for mlfq
+	struct proc *prev;					 // for mlfq
+	
+	
 	uint stride;                 // portion of stride
 	uint pass;                   // pass of stride schedule
-	uint index;
-	int portion;
-	struct proc *next;
-	struct proc *prev;
+	uint index;									 // index for stride Queue
+	int portion;								 // portion of CPU
+	
+	struct proc *mainT;						//MainThread for lwp
+	int time; 										//how many schedule time by cpu for lwp
+	void *retval;									//return value for lwp exit
+
 };
 
 // Process memory is laid out contiguously, low addresses first:
@@ -74,15 +83,16 @@ struct proc {
 #define STRIDE 3
 
 //time quantum
-#define HIGHEST_QUANTUM 1
-#define MIDDLE_QUANTUM 2
-#define LOWEST_QUANTUM 4
+#define HIGHEST_QUANTUM 5
+#define MIDDLE_QUANTUM 10
+#define LOWEST_QUANTUM 20
+#define STRIDE_QUANTUM 5
 
 //time allotment
-#define HIGHEST_ALLOTMENT 5
-#define MIDDLE_ALLOTMENT (10 +HIGHEST_ALLOTMENT) 
+#define HIGHEST_ALLOTMENT 20
+#define MIDDLE_ALLOTMENT (40 +HIGHEST_ALLOTMENT) 
 
-#define PRIORITY_BOOST 100
+#define PRIORITY_BOOST 200
 
 //stride
 #define TICKET 10000
