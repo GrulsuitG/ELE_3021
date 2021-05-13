@@ -130,6 +130,10 @@ void						insert(struct proc*);
 struct proc*		remove(int);
 void						dequeue(int);
 void						overflow(uint);
+int 						thread_create(thread_t*, void*(void*), void*);
+void						thread_exit(void*);
+int 						thread_join(thread_t, void**);
+uint  					getsn(struct proc*);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

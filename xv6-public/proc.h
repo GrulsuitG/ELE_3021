@@ -37,7 +37,7 @@ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
-  pde_t* pgdir;                // Page table
+	pde_t* pgdir;                // Page table
   char *kstack;                // Bottom of kernel stack for this process
   enum procstate state;        // Process state
   int pid;                     // Process ID
@@ -66,7 +66,10 @@ struct proc {
 	struct proc *mainT;						//MainThread for lwp
 	int time; 										//how many schedule time by cpu for lwp
 	void *retval;									//return value for lwp exit
-
+	int yield;
+	uint sn;											//stack number
+																//away from mainthread stack 
+																
 };
 
 // Process memory is laid out contiguously, low addresses first:

@@ -115,6 +115,7 @@ found:
 	p->time = 0;
 	p->retval = 0;
 	p->mainT = 0;
+	p->sn = 0;
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -250,54 +251,64 @@ fork(void)
 
 int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
 	
-	int i, pid;
-	uint oldsz, sz, sp, ustack[3];
+	int i;
+	uint sn, sz, sp, ustack[2];
   struct proc *np;
   struct proc *curproc = myproc();
-	pde_t *pgdir;
 
   // Allocate process.
   if((np = allocproc()) == 0){
     return -1;
   }
-	oldsz = curproc->sz;
-	pgdir = curproc->pgdir;
-	if((sz = allocuvm(pgdir, sz, sz+2*PGSIZE) == 0)){
+	*thread = np->pid;
+  acquire(&ptable.lock);
+	np->pgdir = curproc->pgdir;	
+  *np->tf = *curproc->tf;
+	//alloc 2page (1 for use, 1 for guard)
+	if((sn = curproc->mainT == 0? getsn(curproc) : getsn(curproc->mainT)) < 0){
+			np->state = UNUSED;
+			return -1;
+			}
+	/*cprintf("%x\n", sn);	*/
+	np->sn = sn;
+
+	if((sz = allocuvm(np->pgdir, curproc->sz + sn*2*PGSIZE, curproc->sz+(sn+1)*2*PGSIZE)) == 0){
+		np->state = UNUSED;
 		return -1;	
 	}
-	clearpteu(pgdir, (char*)(sz - 2*PGSIZE));
+	clearpteu(np->pgdir, (char*)(sz - 2*PGSIZE));
 	sp = sz;
 	
 	ustack[0] = 0xffffffff;
 	ustack[1] = (uint)arg;
 
 	sp -= 2*4;
-	if(copyout(pgdir, sp, ustack, 8) < 0){
-		deallocuvm(pgdir, sz, oldsz )
+	if(copyout(np->pgdir, sp, ustack, 2*4) < 0){
+		deallocuvm(np->pgdir, sz, sz-2*PGSIZE );
+		np->state = UNUSED;
 		return -1;
 	}
-	np->pgdir = pgdir;
-  np->sz = curproc->sz;
+	curproc->pgdir = np->pgdir;
+  np->sz = sz;
 	np->tf->eip = (uint)start_routine;
 	np->tf->esp = sp;
-  *np->tf = *curproc->tf;
 	np->parent = curproc;
 	//store mainThread
 	if(curproc->mainT == 0){
   	np->mainT = curproc;
-		curporc->mainT == curproc;
+		curproc->mainT = curproc;
 	}
 	else{
-		np->mainT = curporc->mainT;
+		np->mainT = curproc->mainT;
 	}
 	
 	np->priority = curproc->priority;
-	if(np->priorty == STRIDE){
+	np->curticks = curproc->curticks;
+	if(np->priority == STRIDE){
 		np->stride = curproc->stride;
 		np->pass = curproc->pass;
 	}
 	else{
-		np->curticks = curproc->curticks;
 		np->totalticks = curproc->totalticks;
 	}
 
@@ -309,13 +320,11 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
 
-  acquire(&ptable.lock);
 
   np->state = RUNNABLE;
 	insert(np);
   release(&ptable.lock);
 
- 	*thread = np->pid;
   return 0;
 
 
@@ -395,18 +404,25 @@ void thread_exit(void *retval){
   wakeup1(curproc->mainT);
 
   // Pass abandoned children to init.
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->parent == curproc){
-      p->parent = curporc->mainT;     
-			if(p->state == ZOMBIE)
-        wakeup1(initproc);
-    }
-  }
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		if(p->parent == curproc){
+			if(p->mainT != 0){
+				p->parent = curproc->mainT;     
+				if(p->state == ZOMBIE)
+					wakeup1(p->mainT);
+			}
+			else{
+				p->parent = initproc;
+				if(p->state == ZOMBIE)
+					wakeup1(initproc);
+			}
+		}
+	}
 
   // Jump into the scheduler, never to return.
 	
-  curproc->state = ZOMBIE;
 	curproc->retval = retval;
+  curproc->state = ZOMBIE;
 	sched();
   panic("zombie exit");
 
@@ -460,22 +476,28 @@ wait(void)
 
 int thread_join(thread_t thread, void **retval){
 	struct proc *p;
-  int havekids, pid;
+  int havekids;
   struct proc *curproc = myproc();
+	uint bit;
   
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->mainT != curproc && p->pid != thread)
+      if(p->mainT != curproc || p->pid != thread)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
-        // Found one.
-        pid = p->pid;
+
+				deallocuvm(p->pgdir, p->sz, p->sz-2*PGSIZE);
+				bit = 1 << p->sn;
+				curproc->sn = curproc->sn ^bit ;
+				kfree(p->kstack);
+				p->sn = 0;
+				p->pid = 0;
         p->kstack = 0;
-        p->pid = 0;
+				p->pid = 0;
 				p->parent = 0;
 				p->name[0] = 0;
 				p->killed = 0;
@@ -608,7 +630,7 @@ STRIDEscheduler(void)
 
 
 void
-scheduler(void)
+ascheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
@@ -681,6 +703,42 @@ scheduler(void)
 	}
 
 }
+void
+scheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+  
+  for(;;){
+    // Enable interrupts on this processor.
+    sti();
+
+    // Loop over process table looking for process to run.
+    acquire(&ptable.lock);
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->state != RUNNABLE)
+        continue;
+
+      // Switch to chosen process.  It is the process's job
+      // to release ptable.lock and then reacquire it
+      // before jumping back to us.
+      c->proc = p;
+      switchuvm(p);
+      p->state = RUNNING;
+
+      swtch(&(c->scheduler), p->context);
+      switchkvm();
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+    }
+    release(&ptable.lock);
+
+  }
+}
+
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -706,40 +764,123 @@ sched(void)
   swtch(&p->context, mycpu()->scheduler);
   mycpu()->intena = intena;
 }
-
-// Give up the CPU for one scheduling round.
 void
 yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
+  myproc()->state = RUNNABLE;
+  sched();
+  release(&ptable.lock);
+}
+// Give up the CPU for one scheduling round.
+void
+ayield(void)
+{
+  acquire(&ptable.lock);  //DOC: yieldlock
   struct proc* p = myproc();
-	p->state = RUNNABLE;
-	
+	struct proc* np;
+	if(p->mainT != 0){
+		if(p->mainT == p)
+			p->curticks++;
+		else{
+			p->mainT->curticks++;
+			p->curticks = p->mainT->curticks;
+		}
+
+	}
+	else
+		p->curticks++;
+
+	//MLFQ scheudling
 	if(p->priority != STRIDE){
+		MLFQtick++;
+		//MLFQpass overflow control
 		if(UINT_MAX - MLFQpass < MLFQSTRIDE){
 			overflow(peek());
 		}
 		p->totalticks += p->curticks;
 		
-		//if process runtime is over priority allotment, then change priority
-		if(p->priority == HIGHEST && p->totalticks >= HIGHEST_ALLOTMENT){
-			p->priority = MIDDLE;
+		//prevent starvation.
+		if(MLFQtick % PRIORITY_BOOST == 0)
+			goto sched;
+		//when priority is highest and current ticks over highest quantum
+		else if(p->priority == HIGHEST && p->curticks >= HIGHEST_QUANTUM){
+			//when need priority change
+			if(p->totalticks >= HIGHEST_ALLOTMENT){
+				p->priority = MIDDLE;
+				p->curticks = 0;
+			}
+			goto sched;
 		}
-		else if(p->priority == MIDDLE && p->totalticks >= MIDDLE_ALLOTMENT){
-			p->priority = LOWEST;	
+		//when priority is middle and current ticks over middle quantum
+		else if(p->priority == MIDDLE && p->curticks >= MIDDLE_QUANTUM){
+			//when need priority chanhe
+			if(p->totalticks >= MIDDLE_ALLOTMENT){
+				p->priority = LOWEST;
+				p->curticks = 0;
+			}
+			goto sched;
 		}
-		p->curticks = 0;
+		//when priority is lowest and current ticks over lowest quantum
+		else if(p->priority == LOWEST && p->curticks >= LOWEST_QUANTUM){
+			goto sched;
+		}
+
 	}
+	//STRIDE scheduling
 	else{
 		//pass overflow
-		if(UINT_MAX - p->pass < p->stride){
-			overflow(p->pass);
+		if(p->curticks >= STRIDE_QUANTUM){
+			
+			if(UINT_MAX - p->pass < p->stride){
+				overflow(p->pass);
+			}
+			p->pass += p->stride;
+			goto sched;
 		}
-		p->pass += p->stride;
 	}
-	insert(p);
-  sched();
-  release(&ptable.lock);
+	//if proc pass above checklist and is lwp, 
+	//can swtch diretly
+	if(p->mainT != 0){
+		p->time++;
+		np = p;
+		//find next proc
+		for(struct proc* tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+			if(tp->state == RUNNABLE && tp->mainT == p->mainT){
+				np = tp->time <= np->time ? tp : np;
+			}
+		}
+		if(np->state == ZOMBIE){
+			cprintf("zombie1\n");
+		}
+		p->state = RUNNABLE;
+		insert(p);
+		
+		if(np->priority != STRIDE){
+			if(np->prev != 0){
+				np->prev->next = np->next;
+				if(np->next != 0)
+					np->next->prev = np->prev;
+			}
+			else{
+				dequeue(np->priority);
+			}
+		}
+		else{
+			remove(np->index);
+		}	
+		
+		np->state = RUNNING;
+		swtch(&p->context, np->context);
+
+	}
+	release(&ptable.lock);
+	return ;
+sched:
+		p->state = RUNNABLE;
+		insert(p);
+  	sched();
+  	release(&ptable.lock);
 }
 
 // A fork child's very first scheduling by scheduler()
@@ -1084,4 +1225,31 @@ overflow(uint pass){
 		}		
 	}
 	MLFQpass -= min;
+}
+
+uint
+getsn(struct proc* p)
+{
+	int bit = 1;
+	//if argument is mainThread
+	//get where is empty stack number 
+	if(p->mainT == p || p->mainT == 0){
+		for(int i = 0; i<32; bit = bit<<1){
+			/*cprintf("%x\n", bit);*/
+			if((p->sn & bit) >> i ){
+				i++;
+				continue;
+			}
+			p->sn = p->sn | bit;
+			/*cprintf("%d\n\n",i);*/
+			return i;
+			/*cprint("%d\n",i);*/
+		}	
+	}
+	//if argumnet is not mainThread
+	//return my stack number
+	else{
+		return p->sn;
+	}
+	return -1;
 }

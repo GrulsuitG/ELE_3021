@@ -104,57 +104,7 @@ trap(struct trapframe *tf)
   // If interrupts were on while locks held, would need to check nlock.
   if(myproc() && myproc()->state == RUNNING &&
      tf->trapno == T_IRQ0+IRQ_TIMER){
-		struct proc *p = myproc();
-		struct proc *next;
-		if(p->mainT != 0){
-			p->time++;
-			if(p->mainT == p)
-				p->curticks++;
-			else{
-				p->mainT->curticks++;
-				p->curticks = p->mainT->curticks;
-			}
-		}
-		else{
-			p->curticks++;
-		}
-		if(p->priority != STRIDE){
-			MLFQtick++;
-			if(MLFQtick % PRIORITY_BOOST == 0)
-				yield();
-			else if(p->priority == HIGHEST)
-				yield();
-			else if(p->priority == MIDDLE && p->curticks >=MIDDLE_QUANTUM)
-				yield();
-			else if(p->priority == LOWEST && p->curticks >=LOWEST_QUANTUM)
-				yield();
-		}
-		else{
-			if(p->curticks >= STRIDE_QUANTUM )
-				yield();
-		}
-		if(p->mainT != 0){
-			next = p;
-			for(struct proc *tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
-				if(tp->mainT == p->mainT && tp->state == RUNNABLE)
-					next = tp->time <= next->time ? tp : next;
-			}
-			if(next->priority == STRIDE)
-				remove(next->index);
-			else{
-				if(p->prev == 0)
-					dequeue(p->priority);
-				else{
-					p->prev->next = p->next;
-					if(p->next != 0)
-						p->next->prev = p->prev;
-				}
-
-			}
-			insert(t);
-			swtch(t->context, next->context)
-
-		}
+			yield();	
 	}
 		
 
