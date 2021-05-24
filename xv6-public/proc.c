@@ -269,7 +269,6 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
 			np->state = UNUSED;
 			return -1;
 			}
-	/*cprintf("%x\n", sn);	*/
 	np->sn = sn;
 
 	if((sz = allocuvm(np->pgdir, curproc->sz + sn*2*PGSIZE, curproc->sz+(sn+1)*2*PGSIZE)) == 0){
@@ -292,7 +291,8 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
   np->sz = sz;
 	np->tf->eip = (uint)start_routine;
 	np->tf->esp = sp;
-	np->parent = curproc;
+	np->parent = curproc->parent;
+	/*np->parent = curproc;*/
 	//store mainThread
 	if(curproc->mainT == 0){
   	np->mainT = curproc;
@@ -316,7 +316,7 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
     if(curproc->ofile[i])
       np->ofile[i] = filedup(curproc->ofile[i]);
   np->cwd = idup(curproc->cwd);
-
+	
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
 
@@ -337,41 +337,89 @@ void
 exit(void)
 {
   struct proc *curproc = myproc();
-  struct proc *p;
+  struct proc *p, *cp;
+	/*
+	 *struct proc *mt;
+	 *uint bit;
+	 */
   int fd;
 
   if(curproc == initproc)
     panic("init exiting");
 
   // Close all open files.
-  for(fd = 0; fd < NOFILE; fd++){
-    if(curproc->ofile[fd]){
-      fileclose(curproc->ofile[fd]);
-      curproc->ofile[fd] = 0;
-    }
-  }
+/*
+ *     for(fd = 0; fd < NOFILE; fd++){
+ *        if(curproc->ofile[fd]){
+ *          fileclose(curproc->ofile[fd]);
+ *          curproc->ofile[fd] = 0;
+ *        }
+ *    
+ *      }
+ *
+ *      begin_op();
+ *      iput(curproc->cwd);
+ *      end_op();
+ *      curproc->cwd = 0;
+ */
 
-  begin_op();
-  iput(curproc->cwd);
-  end_op();
-  curproc->cwd = 0;
+	for(p = ptable.proc; p<&ptable.proc[NPROC]; p++){
+		if(p == curproc || 
+				(curproc->mainT && p->mainT == curproc->mainT)){
+			for(fd = 0; fd < NOFILE; fd++){
+				if(p->ofile[fd]){
+					fileclose(p->ofile[fd]);
+					p->ofile[fd] = 0;
+				}
+		
+			}
 
-  acquire(&ptable.lock);
-
+			begin_op();
+			iput(p->cwd);
+			end_op();
+			p->cwd = 0;
+		}
+	}
+	acquire(&ptable.lock);
   // Parent might be sleeping in wait().
-  wakeup1(curproc->parent);
-
+	wakeup1(curproc->parent);
   // Pass abandoned children to init.
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->parent == curproc){
-      p->parent = initproc;
-      if(p->state == ZOMBIE)
-        wakeup1(initproc);
-    }
-  }
+		//current process is managed by LWP
+		if(curproc->mainT && p->mainT == curproc->mainT
+				&& p != curproc){
+			deallocuvm(p->pgdir, p->sz, p->sz-2*PGSIZE);
+			kfree(p->kstack);
+			p->sn = 0;
+			p->pid = 0;
+      p->kstack = 0;
+			p->pid = 0;
+			p->parent = 0;
+			p->name[0] = 0;
+			p->killed = 0;
+			p->mainT = 0;
+			p->state = UNUSED;
+			
+			for(cp = ptable.proc; cp< &ptable.proc[NPROC]; cp++){
+				if(cp->parent == p){
+					cp->parent = initproc;
+					if(cp->state == ZOMBIE)
+						wakeup1(initproc);
+				}
+			}
+		}
+		if(p->parent == curproc){
+			p->parent = initproc;
+			if(p->state == ZOMBIE)
+				wakeup1(initproc);
+		}
+	}
 
+	 /*wakeup1(curproc->parent); */
   // Jump into the scheduler, never to return.
-	
+	if(curproc->priority == STRIDE){
+		allocated -= curproc->portion;
+	}
   curproc->state = ZOMBIE;
 	sched();
   panic("zombie exit");
@@ -384,7 +432,8 @@ void thread_exit(void *retval){
 
   if(curproc == initproc)
     panic("init exiting");
-
+	if(curproc == curproc->mainT)
+		panic("mainThread can't not exit");
   // Close all open files.
   for(fd = 0; fd < NOFILE; fd++){
     if(curproc->ofile[fd]){
@@ -400,7 +449,7 @@ void thread_exit(void *retval){
 
   acquire(&ptable.lock);
 
-  // Parent might be sleeping in wait().
+  // Parent might be sleeping in thread_join().
   wakeup1(curproc->mainT);
 
   // Pass abandoned children to init.
@@ -436,7 +485,6 @@ wait(void)
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
-  
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
@@ -479,7 +527,11 @@ int thread_join(thread_t thread, void **retval){
   int havekids;
   struct proc *curproc = myproc();
 	uint bit;
-  
+ 	
+	if(curproc->mainT != curproc)
+		panic("worker thread can't not join");
+
+
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
@@ -501,9 +553,8 @@ int thread_join(thread_t thread, void **retval){
 				p->parent = 0;
 				p->name[0] = 0;
 				p->killed = 0;
+				p->mainT = 0;
 				*retval = p->retval;
-				if(p->priority == STRIDE)	
-					allocated -= p->portion;
 				p->state = UNUSED;
 				release(&ptable.lock);
 				return 0;
@@ -579,6 +630,8 @@ MLFQscheduler(void)
 				low.head = 0;
 				for(struct proc *tp =ptable.proc; tp<&ptable.proc[NPROC]; tp++){
 					if(tp->state == RUNNABLE && tp->priority != STRIDE){
+						tp->next = 0;
+						tp->prev = 0;
 						tp->priority = HIGHEST;
 						tp->totalticks = 0;
 						insert(tp);
@@ -630,27 +683,27 @@ STRIDEscheduler(void)
 
 
 void
-ascheduler(void)
+scheduler1(void)
 {
-  struct proc *p;
-  struct cpu *c = mycpu();
-  c->proc = 0;
+	struct proc *p, *tp;
+	struct cpu *c = mycpu();
+	c->proc = 0;
 	MLFQtick = 0;
 	int priority;
 	sti();
-  for(;;){
+	for(;;){
 		//STRIDE scheduling
-    acquire(&ptable.lock);
+		acquire(&ptable.lock);
 		if(heapSize > 0 && peek() <= MLFQpass){
 			p = remove(1);
 				// Switch to chosen process.  It is the process's job
-    // to release ptable.lock and then reacquire it
-    // before jumping back to us.
-	  	c->proc = p;
+		// to release ptable.lock and then reacquire it
+		// before jumping back to us.
+			c->proc = p;
 			switchuvm(p);
-    	p->state = RUNNING;
-    	swtch(&(c->scheduler), p->context);
-    	switchkvm();
+			p->state = RUNNING;
+			swtch(&(c->scheduler), p->context);
+			switchkvm();
 			p->curticks = 0;
 			c->proc = 0;
 		}
@@ -687,8 +740,10 @@ ascheduler(void)
 			if(MLFQtick !=0 && MLFQtick % PRIORITY_BOOST == 0){
 				middle.head = 0;
 				low.head = 0;
-				for(struct proc *tp =ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+				for(tp =ptable.proc; tp<&ptable.proc[NPROC]; tp++){
 					if(tp->state == RUNNABLE && tp->priority != STRIDE){
+						tp->next = 0;
+						tp->prev = 0;
 						tp->priority = HIGHEST;
 						tp->totalticks = 0;
 						insert(tp);
@@ -698,11 +753,12 @@ ascheduler(void)
 			}
 			
 			c->proc = 0;
-	 	}
+		 }
 		release(&ptable.lock);
 	}
 
 }
+
 void
 scheduler(void)
 {
@@ -774,23 +830,27 @@ yield(void)
 }
 // Give up the CPU for one scheduling round.
 void
-ayield(void)
+yield1(void)
 {
-  acquire(&ptable.lock);  //DOC: yieldlock
-  struct proc* p = myproc();
-	struct proc* np;
-	if(p->mainT != 0){
-		if(p->mainT == p)
-			p->curticks++;
-		else{
-			p->mainT->curticks++;
-			p->curticks = p->mainT->curticks;
-		}
-
-	}
-	else
-		p->curticks++;
-
+	acquire(&ptable.lock);  //DOC: yieldlock
+	struct proc *p = myproc();
+	/*struct proc *tp, *np;*/
+	/*struct cpu *c = mycpu();*/
+/*
+ *  if(p->mainT != 0){
+ *    p->time++;
+ *    if(p->mainT == p)
+ *      p->curticks++;
+ *    else{
+ *      p->mainT->curticks++;
+ *      p->curticks = p->mainT->curticks;
+ *    }
+ *  }
+ *  else
+ *    p->curticks++;
+ *
+ */
+	p->curticks++;
 	//MLFQ scheudling
 	if(p->priority != STRIDE){
 		MLFQtick++;
@@ -803,29 +863,31 @@ ayield(void)
 		//prevent starvation.
 		if(MLFQtick % PRIORITY_BOOST == 0)
 			goto sched;
-		//when priority is highest and current ticks over highest quantum
-		else if(p->priority == HIGHEST && p->curticks >= HIGHEST_QUANTUM){
-			//when need priority change
-			if(p->totalticks >= HIGHEST_ALLOTMENT){
-				p->priority = MIDDLE;
+		//when totalticks over each level allotment
+		else if(p->priority == HIGHEST && 
+				p->totalticks >= HIGHEST_ALLOTMENT){
+			p->priority = MIDDLE;	
+		}
+		else if(p->priority == MIDDLE && 
+				p->totalticks >= MIDDLE_ALLOTMENT){
+			p->priority = LOWEST;		
+		}
+		//when curticks over each level quantum	
+		if(p->priority == HIGHEST &&
+			p->curticks >= HIGHEST_QUANTUM){
 				p->curticks = 0;
-			}
+				goto sched;
+		}
+		else if(p->priority == MIDDLE &&
+			p->curticks >= MIDDLE_QUANTUM){
+			p->curticks = 0;
 			goto sched;
 		}
-		//when priority is middle and current ticks over middle quantum
-		else if(p->priority == MIDDLE && p->curticks >= MIDDLE_QUANTUM){
-			//when need priority chanhe
-			if(p->totalticks >= MIDDLE_ALLOTMENT){
-				p->priority = LOWEST;
-				p->curticks = 0;
-			}
+		else if(p->priority == LOWEST && 
+			p->curticks >= LOWEST_QUANTUM){
+			p->curticks = 0;	
 			goto sched;
 		}
-		//when priority is lowest and current ticks over lowest quantum
-		else if(p->priority == LOWEST && p->curticks >= LOWEST_QUANTUM){
-			goto sched;
-		}
-
 	}
 	//STRIDE scheduling
 	else{
@@ -841,48 +903,87 @@ ayield(void)
 	}
 	//if proc pass above checklist and is lwp, 
 	//can swtch diretly
-	if(p->mainT != 0){
-		p->time++;
-		np = p;
-		//find next proc
-		for(struct proc* tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
-			if(tp->state == RUNNABLE && tp->mainT == p->mainT){
-				np = tp->time <= np->time ? tp : np;
-			}
-		}
-		if(np->state == ZOMBIE){
-			cprintf("zombie1\n");
-		}
-		p->state = RUNNABLE;
-		insert(p);
-		
-		if(np->priority != STRIDE){
-			if(np->prev != 0){
-				np->prev->next = np->next;
-				if(np->next != 0)
-					np->next->prev = np->prev;
-			}
-			else{
-				dequeue(np->priority);
-			}
-		}
-		else{
-			remove(np->index);
-		}	
-		
-		np->state = RUNNING;
-		swtch(&p->context, np->context);
-
-	}
+/*
+ *  if(p->mainT != 0){
+ *    np = p;
+ *    //find next proc
+ *    for(tp = ptable.proc; tp<&ptable.proc[NPROC]; tp++){
+ *      if(tp->state == RUNNABLE && tp->mainT == p->mainT){
+ *        np = tp->time <= np->time ? tp : np;
+ *      }
+ *    }
+ *    if(p == np){
+ *      return;
+ *    }
+ *    p->state = RUNNABLE;
+ *    insert(p);
+ *    
+ *    if(np->priority != STRIDE){
+ *      if(np->prev != 0){
+ *        np->prev->next = np->next;
+ *        if(np->next != 0)
+ *          np->next->prev = np->prev;
+ *      }
+ *      else{
+ *        dequeue(np->priority);
+ *      }
+ *    }
+ *    else{
+ *      remove(np->index);
+ *    }	
+ *    
+ *    np->state = RUNNING;
+ *    c->proc = np;
+ *    
+ *
+ *    swtch(&p->context, np->context);
+ *      
+ *    return;
+ *
+ *  }
+ */
 	release(&ptable.lock);
-	return ;
+	return;
+
 sched:
 		p->state = RUNNABLE;
 		insert(p);
-  	sched();
-  	release(&ptable.lock);
+		sched();
+		release(&ptable.lock);
 }
-
+void
+yield2(void)
+{
+  acquire(&ptable.lock);  //DOC: yieldlock
+  struct proc* p = myproc();
+	p->state = RUNNABLE;
+	
+	if(p->priority != STRIDE){
+		if(UINT_MAX - MLFQpass < MLFQSTRIDE){
+			overflow(peek());
+		}
+		p->totalticks += p->curticks;
+		
+		//if process runtime is over priority allotment, then change priority
+		if(p->priority == HIGHEST && p->totalticks >= HIGHEST_ALLOTMENT){
+			p->priority = MIDDLE;
+		}
+		else if(p->priority == MIDDLE && p->totalticks >= MIDDLE_ALLOTMENT){
+			p->priority = LOWEST;	
+		}
+		p->curticks = 0;
+	}
+	else{
+		//pass overflow
+		if(UINT_MAX - p->pass < p->stride){
+			overflow(p->pass);
+		}
+		p->pass += p->stride;
+	}
+	insert(p);
+  sched();
+  release(&ptable.lock);
+}
 // A fork child's very first scheduling by scheduler()
 // will swtch here.  "Return" to user space.
 void
@@ -984,31 +1085,35 @@ int
 kill(int pid)
 {
   struct proc *p;
-
-  acquire(&ptable.lock);
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->pid == pid){
-      p->killed = 1;
-      // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
+	struct proc *killedproc = 0;
+	int success = 0;	
+  acquire(&ptable.lock); 
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		if(p->pid == pid){
+			success = 1;
+			p->killed = 1;
+			killedproc = p;
+			if(p->state == SLEEPING)
         p->state = RUNNABLE;
-			else{
-				if(p->priority == STRIDE ){
-					remove(p->index);
-				}
-				else{
-					if(p->prev)
-						p->prev->next = p->next;
-					if(p->next)
-						p->next->prev = p->prev;
-				}
+			
+		}
+	}
+	if(killedproc && killedproc->mainT){	
+		for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+			if(p->mainT == killedproc->mainT){
+				p->killed = 1;
+			
+				// Wake process from sleep if necessary.
+				if(p->state == SLEEPING)
+					p->state = RUNNABLE;
 			}
-      release(&ptable.lock);
-      return 0;
-    }
-  }
+		}
+	}
   release(&ptable.lock);
-  return -1;
+	if(success)	
+  	return 0;
+	else 
+		return -1;
 }
 
 //PAGEBREAK: 36
@@ -1043,7 +1148,9 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s %d %x", p->pid, state, p->name, p->stride, p->pass);
+    cprintf("%d %s %s ", p->pid, state, p->name);
+		if(p->parent)
+			cprintf("%s %d", p->parent->name, p->parent->pid);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
@@ -1177,6 +1284,7 @@ remove(int index)
 	swap(index, heapSize--);
 	int parent;
 	int child;
+	p->index = -1;
 	//heapify down
 	if(index != heapSize){
 		parent = index;
@@ -1252,4 +1360,69 @@ getsn(struct proc* p)
 		return p->sn;
 	}
 	return -1;
+}
+
+void
+exec_thread(struct proc *curproc)
+{
+	struct proc *p, *cp;
+	int fd;
+
+
+	for(p = ptable.proc; p<&ptable.proc[NPROC]; p++){
+		if(curproc->mainT && p->mainT == curproc->mainT
+				&& p != curproc){
+			for(fd = 0; fd < NOFILE; fd++){
+				if(p->ofile[fd]){
+					fileclose(p->ofile[fd]);
+					p->ofile[fd] = 0;
+				}
+		
+			}
+
+			begin_op();
+			iput(p->cwd);
+			end_op();
+			p->cwd = 0;
+		}
+	}
+	acquire(&ptable.lock);
+  // Parent might be sleeping in wait().
+	wakeup1(curproc->parent);
+  // Pass abandoned children to init.
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		//current process is managed by LWP
+		if(curproc->mainT && p->mainT == curproc->mainT
+				&& p != curproc){
+			deallocuvm(p->pgdir, p->sz, p->sz-2*PGSIZE);
+			kfree(p->kstack);
+			p->sn = 0;
+			p->pid = 0;
+      p->kstack = 0;
+			p->pid = 0;
+			p->parent = 0;
+			p->name[0] = 0;
+			p->killed = 0;
+			p->mainT = 0;
+			p->state = UNUSED;
+			
+			for(cp = ptable.proc; cp< &ptable.proc[NPROC]; cp++){
+				if(cp->parent == p){
+					cp->parent = initproc;
+					if(cp->state == ZOMBIE)
+						wakeup1(initproc);
+				}
+			}
+		}
+		if(p->parent == curproc){
+			p->parent = initproc;
+			if(p->state == ZOMBIE)
+				wakeup1(initproc);
+		}
+	}
+
+	curproc->mainT = 0;
+	/*wakeup1(curproc->parent);*/
+	release(&ptable.lock);
+
 }

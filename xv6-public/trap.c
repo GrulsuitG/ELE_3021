@@ -104,7 +104,26 @@ trap(struct trapframe *tf)
   // If interrupts were on while locks held, would need to check nlock.
   if(myproc() && myproc()->state == RUNNING &&
      tf->trapno == T_IRQ0+IRQ_TIMER){
-			yield();	
+		/*
+		 *struct proc *p = myproc();
+		 *if(p->priority != STRIDE){
+		 *  p->curticks++;
+		 *  MLFQtick++;
+		 *  if(MLFQtick % PRIORITY_BOOST == 0)
+		 *    yield();
+		 *  else if(p->priority == HIGHEST)
+		 *    yield();
+		 *  else if(p->priority == MIDDLE && p->curticks >=MIDDLE_QUANTUM)
+		 *    yield();
+		 *  else if(p->priority == LOWEST && p->curticks >=LOWEST_QUANTUM)
+		 *    yield();
+		 *}
+		 *else{
+		 *  [>cprintf("a\n");<]
+		 *  yield();
+		 *}
+		 */
+		yield();
 	}
 		
 

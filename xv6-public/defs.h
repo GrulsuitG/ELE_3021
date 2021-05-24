@@ -134,6 +134,7 @@ int 						thread_create(thread_t*, void*(void*), void*);
 void						thread_exit(void*);
 int 						thread_join(thread_t, void**);
 uint  					getsn(struct proc*);
+void 						exec_thread(struct proc*);
 
 // swtch.S
 void            swtch(struct context**, struct context*);
