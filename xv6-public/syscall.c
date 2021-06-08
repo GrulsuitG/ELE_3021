@@ -111,6 +111,8 @@ extern int sys_set_cpu_share(void);
 extern int sys_thread_create(void);
 extern int sys_thread_exit(void);
 extern int sys_thread_join(void);
+extern int sys_sync(void);
+extern int sys_get_log_num(void);
 
 
 static int (*syscalls[])(void) = {
@@ -143,6 +145,8 @@ static int (*syscalls[])(void) = {
 [SYS_thread_create] sys_thread_create,
 [SYS_thread_exit] sys_thread_exit,
 [SYS_thread_join] sys_thread_join,
+[SYS_sync] 		sys_sync,
+[SYS_get_log_num] sys_get_log_num,
 };
 
 void

@@ -145,32 +145,36 @@ begin_op(void)
 void
 end_op(void)
 {
-  int do_commit = 0;
+  /*int do_commit = 0;*/
 
   acquire(&log.lock);
   log.outstanding -= 1;
-  if(log.committing)
-    panic("log.committing");
-  if(log.outstanding == 0){
-    do_commit = 1;
-    log.committing = 1;
-  } else {
-    // begin_op() may be waiting for log space,
-    // and decrementing log.outstanding has decreased
-    // the amount of reserved space.
-    wakeup(&log);
-  }
-  release(&log.lock);
-
-  if(do_commit){
-    // call commit w/o holding locks, since not allowed
-    // to sleep with locks.
-    commit();
-    acquire(&log.lock);
-    log.committing = 0;
-    wakeup(&log);
-    release(&log.lock);
-  }
+/*
+ *  if(log.committing)
+ *    panic("log.committing");
+ *  if(log.outstanding == 0){
+ *    do_commit = 1;
+ *    log.committing = 1;
+ *  } else {
+ *    // begin_op() may be waiting for log space,
+ *    // and decrementing log.outstanding has decreased
+ *    // the amount of reserved space.
+ *    wakeup(&log);
+ *  }
+ *  release(&log.lock);
+ *
+ *  if(do_commit){
+ *    // call commit w/o holding locks, since not allowed
+ *    // to sleep with locks.
+ *    commit();
+ *    acquire(&log.lock);
+ *    log.committing = 0;
+ *    wakeup(&log);
+ *    release(&log.lock);
+ *  }
+ */
+	release(&log.lock);
+	
 }
 
 // Copy modified blocks from cache to log.
@@ -215,20 +219,55 @@ log_write(struct buf *b)
 {
   int i;
 
-  if (log.lh.n >= LOGSIZE || log.lh.n >= log.size - 1)
+  if (log.lh.n > LOGSIZE || log.lh.n > log.size - 1)
     panic("too big a transaction");
   if (log.outstanding < 1)
     panic("log_write outside of trans");
-
+	
+	if(log.lh.n == LOGSIZE || log.lh.n == (log.size -1)){
+		sync();
+	}
   acquire(&log.lock);
   for (i = 0; i < log.lh.n; i++) {
     if (log.lh.block[i] == b->blockno)   // log absorbtion
       break;
   }
-  log.lh.block[i] = b->blockno;
+	  log.lh.block[i] = b->blockno;
   if (i == log.lh.n)
     log.lh.n++;
   b->flags |= B_DIRTY; // prevent eviction
   release(&log.lock);
 }
 
+int
+sync()
+{
+	int do_commit = 0;
+
+	acquire(&log.lock);
+	if(log.committing)
+		panic("log.committing");
+	if(log.outstanding == 0){
+		do_commit = 1;
+		log.committing = 1;
+	}
+	else{
+		wakeup(&log);
+	}
+	release(&log.lock);
+
+	if(do_commit){
+		commit();
+		acquire(&log.lock);
+		log.committing = 0;
+		wakeup(&log);
+		release(&log.lock);
+	}
+	return 0;
+}
+
+int
+get_log_num()
+{
+	return log.lh.n;
+}

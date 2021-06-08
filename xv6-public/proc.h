@@ -102,4 +102,6 @@ struct proc {
 #define MLFQPORTION 20
 #define MLFQSTRIDE (TICKET/MLFQPORTION)
 
+#define HEAP_AREA 5
+
 uint MLFQtick;
