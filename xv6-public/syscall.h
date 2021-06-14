@@ -30,4 +30,3 @@
 #define SYS_thread_join 29
 #define SYS_sync 30
 #define SYS_get_log_num 31
-

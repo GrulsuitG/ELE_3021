@@ -129,10 +129,15 @@ begin_op(void)
   while(1){
     if(log.committing){
       sleep(&log, &log.lock);
-    } else if(log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGSIZE){
+    } else if(log.lh.n + MAXOPBLOCKS > (LOGSIZE-1)){
       // this op might exhaust log space; wait for commit.
-      sleep(&log, &log.lock);
-		} else {
+				release(&log.lock); 
+				sync();
+				acquire(&log.lock);
+				/*cprintf("sleep?!\n");*/
+				 /*sleep(&log, &log.lock);*/
+		
+    } else {
       log.outstanding += 1;
       release(&log.lock);
       break;
@@ -145,41 +150,35 @@ begin_op(void)
 void
 end_op(void)
 {
-	int do_commit = 0;
+  int do_commit = 0;
 
   acquire(&log.lock);
   log.outstanding -= 1;
-	if(log.committing)
-		panic("log.committing");
-	if(log.outstanding == 0){
-		do_commit = 1;
-		log.committing = 1;
-	} else {
-		// begin_op() may be waiting for log space,
-		// and decrementing log.outstanding has decreased
-		// the amount of reserved space.
-		wakeup(&log);
-	}
-	release(&log.lock);
+  if(log.committing)
+    panic("log.committing");
+  if(log.outstanding == 0){
+    do_commit = 1;
+    log.committing = 1;
+  } else {
+    // begin_op() may be waiting for log space,
+    // and decrementing log.outstanding has decreased
+    // the amount of reserved space.
+    wakeup(&log);
+  }
+  release(&log.lock);
 
-	if(do_commit){
-		// call commit w/o holding locks, since not allowed
-		// to sleep with locks.
-		/*commit();*/
-		if(log.lh.n > 0){
-			write_log();
-			write_head();
-		}
-		if( log.lh.n == LOGSIZE - 1){
+  if(do_commit){
+    // call commit w/o holding locks, since not allowed
+    // to sleep with locks.
+		commit();
+		if(log.lh.n == (LOGSIZE -1))
 			sync();
-		}
+		/*commit();*/
 		acquire(&log.lock);
 		log.committing = 0;
-		wakeup(&log);
-		release(&log.lock);
-	}
-	release(&log.lock);
-	
+    wakeup(&log);
+    release(&log.lock);
+  }
 }
 
 // Copy modified blocks from cache to log.
@@ -204,9 +203,11 @@ commit()
   if (log.lh.n > 0) {
     write_log();     // Write modified blocks from cache to log
     write_head();    // Write header to disk -- the real commit
-    install_trans(); // Now install writes to home locations
-    log.lh.n = 0;
-    write_head();    // Erase the transaction from the log
+		/*
+		 *install_trans(); // Now install writes to home locations
+		 *log.lh.n = 0;
+		 *write_head();    // Erase the transaction from the log
+		 */
   }
 }
 
@@ -228,33 +229,46 @@ log_write(struct buf *b)
     panic("too big a transaction");
   if (log.outstanding < 1)
     panic("log_write outside of trans");
-	
+
   acquire(&log.lock);
   for (i = 0; i < log.lh.n; i++) {
     if (log.lh.block[i] == b->blockno)   // log absorbtion
       break;
   }
-	  log.lh.block[i] = b->blockno;
+  log.lh.block[i] = b->blockno;
   if (i == log.lh.n){
     log.lh.n++;
-	}
+		}
   b->flags |= B_DIRTY; // prevent eviction
-  release(&log.lock);
+	/*
+	 *if(log.lh.n == (LOGSIZE -1)){
+	 *  release(&log.lock);
+	 *  commit();
+	 *  sync();
+	 *  [>acquire(&log.lock);<]
+	 *}
+	 *if(log.lh.n != 0)
+	 */
+  	release(&log.lock);
 }
 
 int
-sync()
+sync(void)
 {
-  if(log.lh.n == 0 )
+	/*cprintf("sync!\n");*/
+	if(log.lh.n == 0)
 		return -1;
-	install_trans(); // Now install writes to home locations
-  log.lh.n = 0;
-  write_head();    // Erase the transaction from the log
+	if(log.lh.n > (LOGSIZE-1))
+		return -1;
+	/*commit();*/
+	install_trans();
+	log.lh.n = 0;
+	write_head();
 	return 0;
 }
 
 int
-get_log_num()
+get_log_num(void)
 {
 	return log.lh.n;
 }

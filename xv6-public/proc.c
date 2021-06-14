@@ -187,10 +187,7 @@ growproc(int n)
 {
   uint sz;
   struct proc *curproc = myproc();
-	/*acquire(&ptable.lock);*/
-	if(curproc->mainT != 0)
-		curproc = curproc->mainT;
-	/*release(&ptable.lock);*/
+
   sz = curproc->sz;
   if(n > 0){
     if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
@@ -258,8 +255,7 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
 	uint sn, sz, sp, ustack[2];
   struct proc *np;
   struct proc *curproc = myproc();
-	if(curproc->mainT)
-		curproc = curproc->mainT;
+
   // Allocate process.
   if((np = allocproc()) == 0){
     return -1;
@@ -269,18 +265,13 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
 	np->pgdir = curproc->pgdir;	
   *np->tf = *curproc->tf;
 	//alloc 2page (1 for use, 1 for guard)
-	if((sn = getsn(curproc)) < 0){
+	if((sn = curproc->mainT == 0? getsn(curproc) : getsn(curproc->mainT)) < 0){
 			np->state = UNUSED;
 			return -1;
 			}
-	/*
-	 *if((sn = curproc->mainT == 0? getsn(curproc) : getsn(mainproc)) < 0){
-	 *    np->state = UNUSED;
-	 *    return -1;
-	 *    }
-	 */
-	np->sn = sn;	 
-	if((sz = allocuvm(np->pgdir, curproc->sz + (sn+HEAP_AREA)*2*PGSIZE, curproc->sz+(sn+1+HEAP_AREA)*2*PGSIZE)) == 0){
+	np->sn = sn;
+
+	if((sz = allocuvm(np->pgdir, curproc->sz + sn*2*PGSIZE, curproc->sz+(sn+1)*2*PGSIZE)) == 0){
 		np->state = UNUSED;
 		return -1;	
 	}
@@ -303,17 +294,14 @@ int thread_create(thread_t *thread, void* (*start_routine)(void *), void *arg){
 	np->parent = curproc->parent;
 	/*np->parent = curproc;*/
 	//store mainThread
-	/*
-	 *if(curproc->mainT == 0){
-   *	np->mainT = curproc;
-	 *  curproc->mainT = curproc;
-	 *}
-	 *else{
-	 *  np->mainT = curproc->mainT;
-	 *}
-	 */
-	np->mainT = curproc;
-	curproc->mainT = curproc;
+	if(curproc->mainT == 0){
+  	np->mainT = curproc;
+		curproc->mainT = curproc;
+	}
+	else{
+		np->mainT = curproc->mainT;
+	}
+	
 	np->priority = curproc->priority;
 	np->curticks = curproc->curticks;
 	if(np->priority == STRIDE){

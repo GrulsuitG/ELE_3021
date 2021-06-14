@@ -1,4 +1,4 @@
-r/ File system implementation.  Five layers:
+// File system implementation.  Five layers:
 //   + Blocks: allocator for raw disk blocks.
 //   + Log: crash recovery for multi-step updates.
 //   + Files: inode allocator, reading, writing, metadata.
@@ -396,68 +396,61 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 	bn -= NINDIRECT;
-
+	
 	if(bn < NDBLINDIRECT){
-		//first level search
 		if((addr = ip->addrs[NDIRECT+1]) == 0)
 			ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);
-		
-		//second level search
+
 		bp = bread(ip->dev, addr);
-		a = (unit*)bp->data;
+		a = (uint*)bp->data;
 		if((addr = a[bn/NINDIRECT]) == 0){
 			a[bn/NINDIRECT] = addr = balloc(ip->dev);
 			log_write(bp);
 		}
 		brelse(bp);
-		
-		//find content address
-		bp = bread(ip>dev,addr);
-		a = (unit*)bp->data;
-		if((addr = a[bn % NINDIRECT]) == 0){
-			a[bn % NINDIRECT] = addr = balloc(ip->dev);
+
+		bp = bread(ip->dev, addr);
+		a = (uint*)bp->data;
+		if((addr = a[bn%NINDIRECT]) == 0){
+			a[bn%NINDIRECT] = addr = balloc(ip->dev);
 			log_write(bp);
 		}
-		brelese(bp);
+		brelse(bp);
 		return addr;
-		
 	}
-
 	bn -= NDBLINDIRECT;
-	if(bn < NTRIINDIRECT){
-		//first level search
+	
+	if(bn < NTPLINDIRECT){
 		if((addr = ip->addrs[NDIRECT+2]) == 0)
 			ip->addrs[NDIRECT+2] = addr = balloc(ip->dev);
-		
-		//second level search
+
 		bp = bread(ip->dev, addr);
-		a = (unit*)bp->data;
+		a = (uint*)bp->data;
 		if((addr = a[bn/NDBLINDIRECT]) == 0){
 			a[bn/NDBLINDIRECT] = addr = balloc(ip->dev);
 			log_write(bp);
 		}
 		brelse(bp);
-		
-		//thrid level search
-		bp = bread(ip->dev, addr);
-		a = (unit*)bp->data;
-		if((addr = a[(bn % NDBLINDIRECT)/ NINDIRECT]) == 0){
-			a[(bn % NDBLINDIRECT) / NINDIRECT ] = addr = balloc(ip->dev);
-			log_write(bp);
-		}
-		brelese(bp);
 
-		//find content address
 		bp = bread(ip->dev, addr);
-		a = (unit*)bp->data;
-		if((addr = a[(bn % NDBLINDIRECT) % NINDIRECT]) == 0){
-			a[(bn % NDBLINDIRECT) % NINDIRECT] = addr = balloc(ip->dev);
+		a = (uint*)bp->data;
+		if((addr = a[(bn%NDBLINDIRECT)/NINDIRECT]) == 0){
+			a[(bn%NDBLINDIRECT)/NINDIRECT] = addr = balloc(ip->dev);
 			log_write(bp);
 		}
-		brelese(bp);
+		brelse(bp);
+
+		bp = bread(ip->dev, addr);
+		a = (uint*)bp->data;
+		if((addr = a[(bn%NDBLINDIRECT) % NINDIRECT]) == 0){
+			a[(bn%NDBLINDIRECT) % NINDIRECT] = addr = balloc(ip->dev);
+			log_write(bp);
+		}
+		brelse(bp);
 		return addr;
-		
 	}
+
+
   panic("bmap: out of range");
 }
 
@@ -479,71 +472,77 @@ itrunc(struct inode *ip)
       ip->addrs[i] = 0;
     }
   }
-	
-	//indirect address
+
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
-      if(a[j])
+      if(a[j]){
         bfree(ip->dev, a[j]);
+				a[j] = 0;
+			}
     }
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
-	
-	//doubly indirect addrss
-	if(ip->addrs[NDIRECT+1]){
-		bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
-		a = (uint*)bp->data;
-		
-		for(i = 0; i <NINDIRECT; i++){
-			if(a[i]){
-				bp2 = bread(ip->dev, a[i]);
-				a2 = (uint*)bp2->data;
-				for(j = 0; j< NINDIRECT; j++){
-					if(a2[j])
-						bfree(ip->dev, a2[j]);
-				}
-				brelse(bp2);
-				bfree(ip->dev, a[i])/
-			}
-		}
-		brelse(bp);	
-		bfree(ip->dev, ip->addrs[NDIRECT+1]);
-		ip->addrs[NDIRECT+1] = 0;
-	}
 
-	//triple indirect address
-	if(ip->addrs[NDIRECT+2]){
-		bp = bread(ip->dev, ip->addrs[NDIRECT+2]);
-		a = (uint*)bp->data;
-		
-		for(i = 0; i <NINDIRECT; i++){
-			if(a[i]){
+	//double indirect
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(i = 0; i < NINDIRECT; i++){
+      if(a[i]){
 				bp2 = bread(ip->dev, a[i]);
 				a2 = (uint*)bp2->data;
-				for(j = 0; j< NINDIRECT; j++){
+				for(j = 0; j < NINDIRECT; j++){
 					if(a2[j]){
-						bp3 = bread(ip->dev, a2[j]);
-						a3 = (uint*)bp3->data;
-						for(k = 0; k<NINDIRECT; k++){
-							if(a3[k])
-								bfree(ip->dev, a3[k]);
-						}
-						brelse(bp3);
 						bfree(ip->dev, a2[j]);
+						a2[j] = 0;
 					}
 				}
 				brelse(bp2);
-				bfree(ip->dev , a[i]);
+				bfree(ip->dev,a[i]);
+				a[i] = 0;
 			}
-		}
-		brelse(bp);
-		bfree(ip->dev, ip->addrs[NDIRECT+2]);
-	}
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
+  }
 
+	//triple indirect
+	if(ip->addrs[NDIRECT+2]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+2]);
+    a = (uint*)bp->data;
+    for(i = 0; i < NINDIRECT; i++){
+      if(a[i]){
+				bp2 = bread(ip->dev, a[i]);
+				a2 = (uint*)bp2->data;
+				for(j = 0; j < NINDIRECT; j++){
+					if(a2[j]){
+						bp3 = bread(ip->dev, a2[j]);
+						a3 = (uint*)bp2->data;
+						for(k = 0; k<NINDIRECT; k++){
+							if(a3[k]){
+								bfree(ip->dev, a3[k]);
+								a3[k] = 0;
+							}
+						}
+						brelse(bp3);
+						bfree(ip->dev, a2[j]);
+						a2[j] = 0;
+					}
+				}
+				brelse(bp2);
+				bfree(ip->dev,a[i]);
+				a[i] = 0;
+			}
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+2]);
+    ip->addrs[NDIRECT+2] = 0;
+  }
 
   ip->size = 0;
   iupdate(ip);

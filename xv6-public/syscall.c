@@ -145,7 +145,7 @@ static int (*syscalls[])(void) = {
 [SYS_thread_create] sys_thread_create,
 [SYS_thread_exit] sys_thread_exit,
 [SYS_thread_join] sys_thread_join,
-[SYS_sync] 		sys_sync,
+[SYS_sync] sys_sync,
 [SYS_get_log_num] sys_get_log_num,
 };
 
