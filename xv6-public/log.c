@@ -240,15 +240,13 @@ log_write(struct buf *b)
     log.lh.n++;
 		}
   b->flags |= B_DIRTY; // prevent eviction
-	/*
-	 *if(log.lh.n == (LOGSIZE -1)){
-	 *  release(&log.lock);
-	 *  commit();
-	 *  sync();
-	 *  [>acquire(&log.lock);<]
-	 *}
-	 *if(log.lh.n != 0)
-	 */
+	if(log.lh.n == (LOGSIZE -1)){
+		release(&log.lock);
+		commit();
+		sync();
+		acquire(&log.lock);
+	}
+	if(log.lh.n != 0)
   	release(&log.lock);
 }
 
@@ -260,7 +258,6 @@ sync(void)
 		return -1;
 	if(log.lh.n > (LOGSIZE-1))
 		return -1;
-	/*commit();*/
 	install_trans();
 	log.lh.n = 0;
 	write_head();

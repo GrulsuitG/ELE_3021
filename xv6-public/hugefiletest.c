@@ -17,7 +17,7 @@ main(int argc, char *argv[])
     int total;
     char *path = (argc > 1) ? argv[1] : "hugefile";
     char data[BUFSIZE];
-    //char buf[BUFSIZE];
+    char buf[BUFSIZE];
 
     printf(1, "hugefiletest starting\n");
     const int sz = sizeof(data);
@@ -38,7 +38,7 @@ main(int argc, char *argv[])
     }
     printf(1, "%d bytes written\n", BUF_PER_FILE * BUFSIZE);
     close(fd);
-/*
+
     printf(1, "2. read test\n");
     fd = open(path, O_RDONLY);
     for (i = 0; i < BUF_PER_FILE; i++){
@@ -58,7 +58,7 @@ main(int argc, char *argv[])
     }
     printf(1, "%d bytes read\n", BUF_PER_FILE * BUFSIZE);
     close(fd);
-*/
+
     printf(1, "3. stress test\n");
     total = 0;
     for (i = 0; i < NUM_STRESS; i++) {
