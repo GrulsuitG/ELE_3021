@@ -522,7 +522,7 @@ itrunc(struct inode *ip)
 				for(j = 0; j < NINDIRECT; j++){
 					if(a2[j]){
 						bp3 = bread(ip->dev, a2[j]);
-						a3 = (uint*)bp2->data;
+						a3 = (uint*)bp3->data;
 						for(k = 0; k<NINDIRECT; k++){
 							if(a3[k]){
 								bfree(ip->dev, a3[k]);
@@ -604,7 +604,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return devsw[ip->major].write(ip, src, n);
   }
 
-  if(off > ip->size || off + n < off)
+  if(off + n < off)
     return -1;
   if(off + n > MAXFILE*BSIZE)
     return -1;

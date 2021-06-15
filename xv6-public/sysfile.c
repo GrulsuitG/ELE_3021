@@ -454,3 +454,41 @@ sys_get_log_num(void)
 {
 	return get_log_num();
 }
+
+int
+sys_pread(void)
+{
+	struct file *f;
+	int n, off;
+	char *addr;
+
+	if(argfd(0, 0, &f) < 0)
+		return -1;
+	if(argint(2, &n) < 0)
+		return -1;
+	if(argptr(1, &addr, n) < 0)
+		return -1;
+	if(argint(3, &off) < 0)
+		return -1;
+
+	return filepread(f, addr, n, off);
+}
+	
+int
+sys_pwrite(void)
+{
+	struct file *f;
+	int n, off;
+	char *addr;
+
+	if(argfd(0, 0, &f) < 0)
+		return -1;
+	if(argint(2, &n) < 0)
+		return -1;
+	if(argptr(1, &addr, n) < 0)
+		return -1;
+	if(argint(3, &off) < 0)
+		return -1;
+
+	return filepwrite(f, addr, n, off);
+}
